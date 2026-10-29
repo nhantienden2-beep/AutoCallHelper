@@ -13,6 +13,7 @@ permissions:
 
 jobs:
   build:
+    name: Build unsigned iOS IPA
     runs-on: macos-14
     timeout-minutes: 30
     env:
@@ -20,21 +21,21 @@ jobs:
       SCHEME: AutoCallHelper
 
     steps:
-      - name: Checkout repository
+      - name: Checkout source
         uses: actions/checkout@v4
 
-      - name: Show Xcode version and inspect project
+      - name: Verify Xcode project
         run: |
           set -euo pipefail
           xcodebuild -version
           test -d "$PROJECT" || {
-            echo "::error::Xcode project not found: $PROJECT"
+            echo "::error::Project not found: $PROJECT"
             find AutoCallHelper_WindowsBuild -maxdepth 4 -print
             exit 1
           }
           xcodebuild -list -project "$PROJECT"
 
-      - name: Build for physical iOS devices (unsigned)
+      - name: Build for physical iPhone (unsigned)
         run: |
           set -euo pipefail
           xcodebuild \
@@ -49,22 +50,22 @@ jobs:
             CODE_SIGN_IDENTITY="" \
             build
 
-    
-      
       - name: Package and validate IPA
         run: |
           set -euo pipefail
-          APP="${{ steps.verify.outputs.app_path }}"
+          APP="$RUNNER_TEMP/DerivedData/Build/Products/Release-iphoneos/AutoCallHelper.app"
+          test -d "$APP" || {
+            echo "::error::Built app not found at $APP"
+            find "$RUNNER_TEMP/DerivedData/Build/Products" -maxdepth 4 -print
+            exit 1
+          }
           STAGE="$RUNNER_TEMP/ipa-stage"
           mkdir -p "$STAGE/Payload"
           ditto "$APP" "$STAGE/Payload/AutoCallHelper.app"
-          (
-            cd "$STAGE"
-            /usr/bin/zip -qry "$GITHUB_WORKSPACE/AutoCallHelper-unsigned.ipa" Payload
-          )
+          (cd "$STAGE" && /usr/bin/zip -qry "$GITHUB_WORKSPACE/AutoCallHelper-unsigned.ipa" Payload)
           test -s "$GITHUB_WORKSPACE/AutoCallHelper-unsigned.ipa"
           unzip -t "$GITHUB_WORKSPACE/AutoCallHelper-unsigned.ipa"
-          unzip -l "$GITHUB_WORKSPACE/AutoCallHelper-unsigned.ipa" | grep 'Payload/.*\.app/Info.plist'
+          unzip -l "$GITHUB_WORKSPACE/AutoCallHelper-unsigned.ipa" | grep 'Payload/AutoCallHelper.app/Info.plist'
 
       - name: Upload unsigned IPA
         uses: actions/upload-artifact@v4
