@@ -1,0 +1,83 @@
+name: Build AutoCallHelper IPA
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "AutoCallHelper_WindowsBuild/**"
+      - ".github/workflows/ios-ipa.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build-ipa:
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Check Xcode project
+        shell: bash
+        run: |
+          set -euo pipefail
+          PROJECT="AutoCallHelper_WindowsBuild/AutoCallHelper.xcodeproj"
+          if [ ! -d "$PROJECT" ]; then
+            echo "::error::Không tìm thấy $PROJECT. Các project tìm thấy:"
+            find . -maxdepth 5 \( -name '*.xcodeproj' -o -name '*.xcworkspace' \) -print
+            exit 1
+          fi
+          echo "PROJECT=$PROJECT" >> "$GITHUB_ENV"
+          xcodebuild -list -project "$PROJECT"
+
+      - name: Detect scheme
+        shell: bash
+        run: |
+          set -euo pipefail
+          SCHEME="$(xcodebuild -list -json -project "$PROJECT" | python3 -c 'import json,sys; d=json.load(sys.stdin); p=next(iter(d.values())); s=p.get("schemes", []); print(s[0] if s else "")')"
+          if [ -z "$SCHEME" ]; then
+            echo "::error::Không tìm thấy scheme trong Xcode project."
+            exit 1
+          fi
+          echo "SCHEME=$SCHEME" >> "$GITHUB_ENV"
+          echo "Đang dùng scheme: $SCHEME"
+
+      - name: Build unsigned iOS app
+        shell: bash
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project "$PROJECT" \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath "$RUNNER_TEMP/AutoCallHelperDerivedData" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_IDENTITY="" \
+            build 2>&1 | tee "$RUNNER_TEMP/xcodebuild.log"
+
+      - name: Package unsigned IPA
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP="$(find "$RUNNER_TEMP/AutoCallHelperDerivedData/Build/Products/Release-iphoneos" -maxdepth 1 -type d -name '*.app' -print -quit)"
+          if [ -z "$APP" ]; then
+            echo "::error::Build không tạo ra file .app; không thể đóng gói IPA."
+            exit 1
+          fi
+          mkdir -p "$RUNNER_TEMP/ipa/Payload"
+          cp -R "$APP" "$RUNNER_TEMP/ipa/Payload/"
+          (cd "$RUNNER_TEMP/ipa" && /usr/bin/zip -qry "$GITHUB_WORKSPACE/AutoCallHelper-unsigned.ipa" Payload)
+          ls -lh "$GITHUB_WORKSPACE/AutoCallHelper-unsigned.ipa"
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AutoCallHelper-unsigned-IPA
+          path: AutoCallHelper-unsigned.ipa
+          if-no-files-found: error
+          retention-days: 7
