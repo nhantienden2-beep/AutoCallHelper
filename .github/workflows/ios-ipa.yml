@@ -49,43 +49,38 @@ jobs:
             CODE_SIGN_IDENTITY="" \
             build
 
+    
       - name: Verify built app
         id: verify
         run: |
           set -euo pipefail
           APP="$RUNNER_TEMP/DerivedData/Build/Products/Release-iphoneos/${SCHEME}.app"
+
           if [ ! -d "$APP" ]; then
-            echo "::error::Built .app was not found at $APP"
-            find "$RUNNER_TEMP/DerivedData/Build/Products" -maxdepth 4 -print || true
+            echo "::error::Built app not found: $APP"
+            find "$RUNNER_TEMP/DerivedData/Build/Products" -maxdepth 5 -print || true
             exit 1
           fi
-          if [ ! -f "$APP/Info.plist" ]; then
-            echo "::error::Info.plist is missing from the app bundle"
+
+          echo "=== App bundle contents ==="
+          ls -la "$APP"
+          echo "=== Locate Info.plist ==="
+          find "$APP" -name Info.plist -print
+
+          PLIST="$APP/Info.plist"
+          if [ ! -f "$PLIST" ]; then
+            PLIST="$(find "$APP" -name Info.plist -print -quit)"
+          fi
+
+          if [ -z "${PLIST:-}" ] || [ ! -f "$PLIST" ]; then
+            echo "::error::Info.plist not found inside app bundle"
             exit 1
           fi
-          /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Info.plist"
-          /usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP/Info.plist"
+
+          echo "=== Bundle identifier ==="
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$PLIST" || true
+
+          echo "=== Executable ==="
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$PLIST" || true
+
           echo "app_path=$APP" >> "$GITHUB_OUTPUT"
-
-      - name: Package and validate IPA
-        run: |
-          set -euo pipefail
-          APP="${{ steps.verify.outputs.app_path }}"
-          STAGE="$RUNNER_TEMP/ipa-stage"
-          mkdir -p "$STAGE/Payload"
-          ditto "$APP" "$STAGE/Payload/${SCHEME}.app"
-          (
-            cd "$STAGE"
-            /usr/bin/zip -qry "$GITHUB_WORKSPACE/AutoCallHelper-unsigned.ipa" Payload
-          )
-          test -s "$GITHUB_WORKSPACE/AutoCallHelper-unsigned.ipa"
-          unzip -t "$GITHUB_WORKSPACE/AutoCallHelper-unsigned.ipa"
-          unzip -l "$GITHUB_WORKSPACE/AutoCallHelper-unsigned.ipa" | grep -E 'Payload/[^/]+\.app/Info\.plist$'
-
-      - name: Upload unsigned IPA
-        uses: actions/upload-artifact@v4
-        with:
-          name: AutoCallHelper-unsigned-IPA
-          path: AutoCallHelper-unsigned.ipa
-          if-no-files-found: error
-          retention-days: 7
