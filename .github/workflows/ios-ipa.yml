@@ -12,69 +12,77 @@ permissions:
   contents: read
 
 jobs:
-  build-ipa:
-    runs-on: macos-latest
+  build:
+    runs-on: macos-14
     timeout-minutes: 30
+    env:
+      PROJECT: AutoCallHelper_WindowsBuild/AutoCallHelper.xcodeproj
+      SCHEME: AutoCallHelper
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Check Xcode project
-        shell: bash
+      - name: Show Xcode version and inspect project
         run: |
           set -euo pipefail
-          PROJECT="AutoCallHelper_WindowsBuild/AutoCallHelper.xcodeproj"
-          if [ ! -d "$PROJECT" ]; then
-            echo "::error::Không tìm thấy $PROJECT. Các project tìm thấy:"
-            find . -maxdepth 5 \( -name '*.xcodeproj' -o -name '*.xcworkspace' \) -print
+          xcodebuild -version
+          test -d "$PROJECT" || {
+            echo "::error::Xcode project not found: $PROJECT"
+            find AutoCallHelper_WindowsBuild -maxdepth 4 -print
             exit 1
-          fi
-          echo "PROJECT=$PROJECT" >> "$GITHUB_ENV"
+          }
           xcodebuild -list -project "$PROJECT"
 
-      - name: Detect scheme
-        shell: bash
+      - name: Build for physical iOS devices (unsigned)
         run: |
           set -euo pipefail
-          SCHEME="$(xcodebuild -list -json -project "$PROJECT" | python3 -c 'import json,sys; d=json.load(sys.stdin); p=next(iter(d.values())); s=p.get("schemes", []); print(s[0] if s else "")')"
-          if [ -z "$SCHEME" ]; then
-            echo "::error::Không tìm thấy scheme trong Xcode project."
-            exit 1
-          fi
-          echo "SCHEME=$SCHEME" >> "$GITHUB_ENV"
-          echo "Đang dùng scheme: $SCHEME"
-
-      - name: Build unsigned iOS app
-        shell: bash
-        run: |
-          set -o pipefail
           xcodebuild \
             -project "$PROJECT" \
             -scheme "$SCHEME" \
             -configuration Release \
             -sdk iphoneos \
             -destination 'generic/platform=iOS' \
-            -derivedDataPath "$RUNNER_TEMP/AutoCallHelperDerivedData" \
+            -derivedDataPath "$RUNNER_TEMP/DerivedData" \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGNING_IDENTITY="" \
-            build 2>&1 | tee "$RUNNER_TEMP/xcodebuild.log"
+            CODE_SIGN_IDENTITY="" \
+            build
 
-      - name: Package unsigned IPA
-        shell: bash
+      - name: Verify built app
+        id: verify
         run: |
           set -euo pipefail
-          APP="$(find "$RUNNER_TEMP/AutoCallHelperDerivedData/Build/Products/Release-iphoneos" -maxdepth 1 -type d -name '*.app' -print -quit)"
-          if [ -z "$APP" ]; then
-            echo "::error::Build không tạo ra file .app; không thể đóng gói IPA."
+          APP="$RUNNER_TEMP/DerivedData/Build/Products/Release-iphoneos/${SCHEME}.app"
+          if [ ! -d "$APP" ]; then
+            echo "::error::Built .app was not found at $APP"
+            find "$RUNNER_TEMP/DerivedData/Build/Products" -maxdepth 4 -print || true
             exit 1
           fi
-          mkdir -p "$RUNNER_TEMP/ipa/Payload"
-          cp -R "$APP" "$RUNNER_TEMP/ipa/Payload/"
-          (cd "$RUNNER_TEMP/ipa" && /usr/bin/zip -qry "$GITHUB_WORKSPACE/AutoCallHelper-unsigned.ipa" Payload)
-          ls -lh "$GITHUB_WORKSPACE/AutoCallHelper-unsigned.ipa"
+          if [ ! -f "$APP/Info.plist" ]; then
+            echo "::error::Info.plist is missing from the app bundle"
+            exit 1
+          fi
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Info.plist"
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP/Info.plist"
+          echo "app_path=$APP" >> "$GITHUB_OUTPUT"
 
-      - name: Upload IPA artifact
+      - name: Package and validate IPA
+        run: |
+          set -euo pipefail
+          APP="${{ steps.verify.outputs.app_path }}"
+          STAGE="$RUNNER_TEMP/ipa-stage"
+          mkdir -p "$STAGE/Payload"
+          ditto "$APP" "$STAGE/Payload/${SCHEME}.app"
+          (
+            cd "$STAGE"
+            /usr/bin/zip -qry "$GITHUB_WORKSPACE/AutoCallHelper-unsigned.ipa" Payload
+          )
+          test -s "$GITHUB_WORKSPACE/AutoCallHelper-unsigned.ipa"
+          unzip -t "$GITHUB_WORKSPACE/AutoCallHelper-unsigned.ipa"
+          unzip -l "$GITHUB_WORKSPACE/AutoCallHelper-unsigned.ipa" | grep -E 'Payload/[^/]+\.app/Info\.plist$'
+
+      - name: Upload unsigned IPA
         uses: actions/upload-artifact@v4
         with:
           name: AutoCallHelper-unsigned-IPA
