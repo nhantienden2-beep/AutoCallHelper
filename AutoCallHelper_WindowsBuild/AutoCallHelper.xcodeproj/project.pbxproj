@@ -14,8 +14,7 @@
 		B10000000000000000000001 /* AutoCallHelperApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutoCallHelperApp.swift; sourceTree = "<group>"; };
 		B10000000000000000000002 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		B10000000000000000000003 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
-		B10000000000000000000004 /* AutoCallHelper.app */ = {isa = BUILT_PRODUCTS_DIR; explicitFileType = wrapper.application; includeInIndex = 0; path = AutoCallHelper.app; sourceTree = BUILT_PRODUCTS_DIR; };
-/* End PBXFileReference section */
+B10000000000000000000004 /* AutoCallHelper.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = AutoCallHelper.app; sourceTree = BUILT_PRODUCTS_DIR; };/* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
 		C10000000000000000000001 /* Frameworks */ = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
