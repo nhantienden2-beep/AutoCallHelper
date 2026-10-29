@@ -1,0 +1,108 @@
+name: Build AutoCallHelper IPA
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ "main" ]
+    paths:
+      - "**/*.swift"
+      - "**/*.xcodeproj/**"
+      - "**/*.xcworkspace/**"
+      - "**/Package.swift"
+      - ".github/workflows/ios-ipa.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build-ios:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Locate Xcode project
+        id: locate
+        shell: bash
+        run: |
+          set -euo pipefail
+          WORKSPACE="$(find . -type d -name '*.xcworkspace' -not -path '*/Pods/*' | head -n 1 || true)"
+          PROJECT="$(find . -type d -name '*.xcodeproj' -not -path '*/Pods/*' | head -n 1 || true)"
+          if [ -n "$WORKSPACE" ]; then
+            echo "kind=workspace" >> "$GITHUB_OUTPUT"
+            echo "path=$WORKSPACE" >> "$GITHUB_OUTPUT"
+          elif [ -n "$PROJECT" ]; then
+            echo "kind=project" >> "$GITHUB_OUTPUT"
+            echo "path=$PROJECT" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::No .xcodeproj or .xcworkspace found. A Windows-only project cannot be converted to an iOS app by changing this workflow."
+            exit 1
+          fi
+
+      - name: List schemes
+        shell: bash
+        run: |
+          if [ "${{ steps.locate.outputs.kind }}" = "workspace" ]; then
+            xcodebuild -list -workspace "${{ steps.locate.outputs.path }}"
+          else
+            xcodebuild -list -project "${{ steps.locate.outputs.path }}"
+          fi
+
+      - name: Build iOS app (unsigned)
+        shell: bash
+        run: |
+          set -euo pipefail
+          KIND="${{ steps.locate.outputs.kind }}"
+          PATH_TO_BUILD="${{ steps.locate.outputs.path }}"
+          if [ "$KIND" = "workspace" ]; then
+            LIST_ARGS=(-workspace "$PATH_TO_BUILD")
+          else
+            LIST_ARGS=(-project "$PATH_TO_BUILD")
+          fi
+
+          # Pick the first shared Xcode scheme. If your project has multiple schemes,
+          # replace this with the exact scheme name shown in the "List schemes" step.
+          if [ "$KIND" = "workspace" ]; then
+            SCHEMES="$(xcodebuild -list -workspace "$PATH_TO_BUILD" 2>/dev/null | sed -n '/Schemes:/,$p' | tail -n +2 | sed '/^[[:space:]]*$/d' | sed 's/^[[:space:]]*//')"
+          else
+            SCHEMES="$(xcodebuild -list -project "$PATH_TO_BUILD" 2>/dev/null | sed -n '/Schemes:/,$p' | tail -n +2 | sed '/^[[:space:]]*$/d' | sed 's/^[[:space:]]*//')"
+          fi
+          SCHEME="$(printf '%s\n' "$SCHEMES" | head -n 1)"
+          if [ -z "$SCHEME" ]; then
+            echo "::error::No Xcode scheme found. Open the project in Xcode and make sure a scheme is shared."
+            exit 1
+          fi
+          echo "Using scheme: $SCHEME"
+          xcodebuild "${LIST_ARGS[@]}" \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath "$RUNNER_TEMP/DerivedData" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            build
+
+      - name: Package unsigned IPA
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP_PATH="$(find "$RUNNER_TEMP/DerivedData/Build/Products/Release-iphoneos" -maxdepth 1 -type d -name '*.app' | head -n 1 || true)"
+          if [ -z "$APP_PATH" ]; then
+            echo "::error::No .app output found. Check the Xcode build log and scheme."
+            exit 1
+          fi
+          mkdir -p "$RUNNER_TEMP/ipa/Payload"
+          cp -R "$APP_PATH" "$RUNNER_TEMP/ipa/Payload/"
+          (cd "$RUNNER_TEMP/ipa" && /usr/bin/zip -qry "$GITHUB_WORKSPACE/AutoCallHelper-unsigned.ipa" Payload)
+          echo "Created unsigned IPA: AutoCallHelper-unsigned.ipa"
+          echo "::warning::This IPA is unsigned. It is a build artifact for testing/inspection, not directly installable on a normal iPhone until signed with a valid Apple certificate and provisioning profile."
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AutoCallHelper-unsigned-IPA
+          path: AutoCallHelper-unsigned.ipa
+          if-no-files-found: error
+          retention-days: 7
